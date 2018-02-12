@@ -13,10 +13,12 @@ try:
     from future_builtins import *   # @UnusedWildImport
     import codecs                   # python-2
     open = codecs.open              # @ReservedAssignment
-    input = raw_input               # @ReservedAssignment
-    range = xrange                  # @ReservedAssignment
+    input = raw_input               # @ReservedAssignment @UndefinedVariable
+    range = xrange                  # @ReservedAssignment @UndefinedVariable
 except ImportError:
     pass                            # python-3
+
+from copy import deepcopy
 
 try:
     from org.cs540.team1.BlockWorldSim import BlockWorld
@@ -28,18 +30,17 @@ except ImportError:
         
 def generateGoalState(numBlocks=10):
     goalStates = {}
-    goalStates[(-40,0,-40)] = str('blue')
-    goalStates[(-49,0,-49)] = str('red')
-    goalStates[(-45,0,-45)] = str('green')
+    goalStates[(40,0,20)] = str('red')
+    goalStates[(36,0,36)] = str('green')
+#     goalStates[(-49,0,-49)] = str('red')
+#     goalStates[(-45,0,-45)] = str('green')
     return goalStates
 
 def getRemainingGoals(state, goalState):
     remaining = []
     currentBlocks = state.items()
     for block in goalState.items():
-        #print('grc block: ', block)
         if block not in currentBlocks and block[1] != 'drone':
-            #print('grc block append: ', block)
             remaining.append(block)
     return remaining
 
@@ -52,60 +53,36 @@ def getRemainingBlocks(state, goalState):
     return remaining
 
 
-def findAlternatePath(state, currentPos, stop, dx, dz, blockType, isDrone):
-    #print('got blocked from ', currentPos, 'try to enter',  proposedPos, ' on way to: ', stop)
-    newDx, newDy, newDz = dx, 1, dz
-    newMove = (newDx, newDy, newDz)
-    newX = max(currentPos[0] + newDx, -50) 
-    newY = max(currentPos[1] + newDy, -50) 
-    newZ = max(currentPos[2] + newDz, -50)
-    newPos = (newX, newY, newZ)
-    if newPos in state:
-        newDx, newDy, newDz = 0, 1, 0
-        newMove = (newDx, newDy, newDz)
-        newX = max(currentPos[0] + newDx, -50) 
-        newY = max(currentPos[1] + newDy, -50) 
-        newZ = max(currentPos[2] + newDz, -50)
-        newPos = (newX, newY, newZ)   
-    start = (newPos,blockType)
-    return [newMove] + getShortestPath(state, start, stop, isDrone)
+def isFinalPosition(currentPos, stopPosition, droneOnly):
+    if droneOnly:
+        return currentPos == stopPosition
+    else:
+        return currentPos[0] == stopPosition[0] and \
+                currentPos[2] == stopPosition[2]
 
-
-def getShortestPath(state, start, stop, isDrone=False):
-    x1, y1, z1 = currentPos = start[0]
+def getShortestPath(state, start, stop, droneOnly):
+    currentPos = start[0]
     x2, y2, z2 = stop[0]
-
-    if isDrone:     # drone must land on a block
+    if droneOnly:     # drone must land on a block to attach
         y2 += 1
-    deltaX, deltaY, deltaZ = x2-x1, y2-y1, z2-z1
-    maxDim = max(abs(deltaX), abs(deltaY), abs(deltaZ))
     moves = []
-    for _ in range(maxDim):
-        x, y, z = 0, 0, 0
-        if deltaX < 0:
-            x = -1
-            deltaX += 1
-        elif deltaX > 0:
-            x = 1
-            deltaX -= 1
-        if deltaY < 0:
-            y = -1
-            deltaY += 1
-        elif deltaY > 0:
-            y = 1
-            deltaY -= 1
-        if deltaZ < 0:
-            z = -1
-            deltaZ += 1
-        elif deltaZ > 0:
-            z = 1
-            deltaZ -= 1
+    while not isFinalPosition(currentPos, (x2,y2,z2), droneOnly):
+        x1, y1, z1 = currentPos
+        x = 1 if x2 > x1 else -1 if x2 < x1 else 0
+        z = 1 if z2 > z1 else -1 if z2 < z1 else 0
+        y = 1 if y2 > y1 else -1 if y2 < y1 else 0
+
         proposedPos = (currentPos[0] + x, currentPos[1] + y, currentPos[2] + z)        
-        if proposedPos in state:
-            moves += findAlternatePath(state, currentPos, stop, x, z, start[1], isDrone)
-            break
-        else:
-            moves.append((x,y,z))
+        while proposedPos in state:
+            #print('got blocked at ', currentPos, 'trying to enter',  proposedPos, ' on way to: ', stop)
+            if y < 1:
+                #print('attempting to climb over')
+                y += 1 
+            else:
+                #print('going straight up')
+                x, y, z = 0, 1, 0 
+            proposedPos = (currentPos[0] + x, currentPos[1] + y, currentPos[2] + z)  
+        moves.append((x,y,z))
         currentPos = proposedPos
     return moves
 
@@ -114,14 +91,17 @@ def getDronePosition(state):
         if v == 'drone':
             return (k, v)
 
-def calcHeuristic(block, goal, state):
-    dronePos = getDronePosition(state)
-    pickupPath = getShortestPath(state, dronePos, block, isDrone=True)
-    dropoffPath = getShortestPath(state, block, goal, isDrone=False)
-    # currently getting block into correct place counts as +1
-    # each move counts as -0.004, so the max traversal (100+100 moves) is still positive
-    heuristic = 1.0 - 0.004 * (len(pickupPath) + len(dropoffPath))
-    return heuristic, pickupPath, dropoffPath 
+def scorePaths(paths):
+    for path in paths:
+        score = 0.0
+        effects = path[3]
+        if 'dump' in effects:
+            score += 1
+        if 'goalState' in effects:
+            score += 1 
+        score -= 0.004 * len(path[4])  # length of path for drone to pickup
+        score -= 0.004 * len(path[5])  # length of path for drone to dropoff
+        path[0] = score
 
 def getCoverCount(state, position):
     x,y,z = position[0], position[1], position[2]
@@ -131,9 +111,20 @@ def getCoverCount(state, position):
         count += 1
     return count
 
-def dumpBlock(state, obstacleBlock):
+def openGoalState(state, color, remainingGoals):
+    for goal in remainingGoals:
+        if goal[1] == color and not isBlockCovered(goal, state):
+            return goal
+    return None
+    
+
+def dumpBlock(state, obstacleBlock, remainingGoals):
     (x, _, z), color = obstacleBlock
-    dumpsite = None
+    dumpsite = openGoalState(state, color, remainingGoals)
+    #print('need to dump ', obstacleBlock)
+    if dumpsite is not None:
+        #print('got a dump match')
+        return dumpsite, 'goalState'
     for i in range(1, 30):
         if -51 < x + i < 51:
             dumpsite = (x+i, 0, z), color
@@ -151,36 +142,71 @@ def dumpBlock(state, obstacleBlock):
             dumpsite = (x, 0, z-i), color
             if dumpsite[0] not in state:
                 break 
-    #print('dumpsite: ', dumpsite)
-    return calcHeuristic(obstacleBlock, dumpsite, state)
+    return dumpsite,''
+
+def isBlockCovered(block, state):
+    x,y,z = block[0]
+    if (x,y+1,z) in state:
+        #print(str(block) + 'is covered')
+        return True
+    else:
+        #print(str(block) + 'is not covered')     
+        return False
+     
+def uncoverGoal(goal, coverCount, state, remainingGoals, paths):
+    effects = [] 
+    x, z = goal[0][0], goal[0][2]
+    y = goal[0][1] + coverCount - 1
+    obstaclePos = (x, y, z)
+    block = (obstaclePos, state[obstaclePos])
+    dumpsite, sideEffect = dumpBlock(state, block, remainingGoals)
+    if sideEffect:
+        effects.append(sideEffect)
+    pickupPath = getShortestPath(state, getDronePosition(state), block, droneOnly=True)
+    dropoffPath = getShortestPath(state, block, dumpsite, droneOnly=False)
+    effects.append('dump')
+    path = [float('nan'), block, dumpsite, effects, pickupPath, dropoffPath]
+    paths.append(path)
+     
         
-        
-def selectNextMove(state, goalState, remainingGoals):
-    maxH = float('-inf')  # heuristic    
+def generatePossiblePaths(state, goalState, remainingGoals):
+    # There are three types of moves to select:
+    # 1.  Moving block to goal position
+    # 2.  Moving obstacle block on or above goal position
+    # 3.  1 and 2 combined (this is very desirable)
+
+    paths = []
+    effects = []
     for goal in remainingGoals: 
         coverCount = getCoverCount(state, goal[0])
-        if coverCount:
-            x, z = goal[0][0], goal[0][2]
-            y = goal[0][1] + coverCount - 1
-            obstaclePos = (x, y, z)
-            obstacleBlock = (obstaclePos, state[obstaclePos])
-            #print('obstacleBlock: ', obstacleBlock)
-            _, dumpPathPickup, dumpPathDropoff = dumpBlock(state, obstacleBlock)
-            return dumpPathPickup, dumpPathDropoff   
-        
-    remainingBlocks = getRemainingBlocks(state, goalState)       
-    bestPathPickup, bestPathDropoff = None, None
-    for goal in remainingGoals:
+        if coverCount > 0:
+            uncoverGoal(goal, coverCount, state, remainingGoals, paths)
+        else:  # normal operation for uncovered goal position
+            remainingBlocks = getRemainingBlocks(state, goalState) 
+            for block in remainingBlocks:
+                if block[1] == goal[1] and not isBlockCovered(block, state):
+                    pickupPath2 = getShortestPath(state, getDronePosition(state), block, droneOnly=True)
+                    dropoffPath2 = getShortestPath(state, block, goal, droneOnly=False)
+                    effects.append('goalState')
+                    path = [float('nan'), block, goal, deepcopy(effects), pickupPath2, dropoffPath2]
+                    paths.append(path)
+                    del effects[:]
+    if len(paths) == 0:  # something went wrong to move random block anywhere
+        remainingBlocks = getRemainingBlocks(state, goalState)
         for block in remainingBlocks:
-            if block[1] == goal[1]:
-                h, pickupPath, dropoffPath = calcHeuristic(block, goal, state)
-                if h > maxH:
-                    maxH, bestPathPickup, bestPathDropoff = h, pickupPath, dropoffPath
-    return bestPathPickup, bestPathDropoff
-    
-def cycleDrone(bw, pickupPath, dropoffPath):
-        #print('pickupPath: ', pickupPath)
-        #print('dropoffPath: ', dropoffPath)
+            if not isBlockCovered(block, state):
+                pickupPath2 = getShortestPath(state, getDronePosition(state), block, droneOnly=True)
+                dumpsite, _ = dumpBlock(state,  block, remainingGoals)
+                dropoffPath2 = getShortestPath(state, block, dumpsite, droneOnly=False)
+    return paths
+
+def selectPath(paths):
+    bestPath = max(paths)  # will select based on first list element which is heuristic
+    return bestPath
+
+def cycleDrone(bw, path):
+        pickupPath = path[4]
+        dropoffPath = path[5]
         for move in pickupPath:
             bw.move(*move)
         bw.attach()
@@ -188,22 +214,33 @@ def cycleDrone(bw, pickupPath, dropoffPath):
             bw.move(*move)
         bw.detach()
         return 2 + len(pickupPath) + len(dropoffPath)
-  
+
+def printPathsReport(remainingGoals, paths):
+    print('')
+    print('remaining goals: ', remainingGoals)
+    print('Path Heuristic, Path start, Path end, effects, pickup moves, dropoff moves')
+    for path in paths:
+        print(path)
+
 def go():    
     goalState = generateGoalState(1)
     bw = BlockWorld()
-    bw.initialize('config1.txt')
+    bw.initialize('config3.txt')
     numOps = 0
+    #bw.plotPoints3d(bw.state(), 'before')
     while True:    
         state = bw.state()
-        remainingGoals = getRemainingGoals(state, goalState)
-        print('remaining goals: ', remainingGoals)
+        remainingGoals = getRemainingGoals(state, goalState)      
         if len(remainingGoals) == 0:
-            print('solved in', str(numOps), 'operations')
-            return
-        pickupPath, dropoffPath = selectNextMove(state, goalState, remainingGoals)
-        numOps += cycleDrone(bw, pickupPath, dropoffPath)
-
+            print('\nSolved in', str(numOps), 'operations')
+            break
+        paths = generatePossiblePaths(state, goalState, remainingGoals)
+        scorePaths(paths)
+        printPathsReport(remainingGoals, paths)
+        path = selectPath(paths)
+        numOps += cycleDrone(bw, path)
+    #bw.plotPoints3d(bw.state(), 'finshed')
+    print('finished running')
+    
 if __name__ == '__main__':
     go()
-    
