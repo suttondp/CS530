@@ -336,7 +336,6 @@ class BlockWorld:
             ax.set_zlabel('Y axis')
             plt.show()
 
-
 # Z is across, top-left corner is -50,-50
 
 if __name__ == '__main__':
