@@ -72,20 +72,26 @@ class Drone:
             self.block_carried.position = (self.position[0], self.position[1]-1, self.position[2])
 
     def grab_block(self, block):
-        self.is_attached = True
-        self.block_carried = block
+        if self.is_attached:
+            strng = 'Drone already attached to a block'
+            raise ValueError(strng)
+        else:
+            self.is_attached = True
+            self.block_carried = block
 
     def drop_block(self):
         #ensure actually carrying a block
         if self.is_attached:
             self.is_attached = False
             self.block_carried = None
+        else:
+            print("Warning: Drone is not currently attached to a block")
 
     def __str__(self):
         return "Drone: " + str(self.position)
 
 class BlockWorld:
-    def __init__(self, X=101, Y=101, Z=101):
+    def __init__(self, X=101, Y=51, Z=101):
         self.Xsize = X
         self.Ysize = Y
         self.Zsize = Z
@@ -102,7 +108,7 @@ class BlockWorld:
         logging.debug(initString)
         
     def _validMove(self, newX, newY, newZ):
-        if max(abs(newX), abs(newZ)) > self.Xsize /2 or newY > 51:
+        if max(abs(newX), abs(newZ)) > self.Xsize /2 or newY > self.Ysize:
             raise ValueError('"{0}, {1}, {2} position out of bounds'.format(newX, newY, newZ))
         elif newY < 0 or (newY == 0 and self.attached):
             raise ValueError('Y value too low')
@@ -115,15 +121,26 @@ class BlockWorld:
             strng = 'new drone position occupied ' + str((newX, newY, newZ))
             raise ValueError(strng)
         return True
-         
-    def _wr(self, x, y, z, val):        
+
+    def _wr(self, x, y, z, obj):
+        self.arr[x+self.Xsize // 2][y][z+self.Zsize // 2] = obj
+        # Make sure the drone or block knows where it is now...
+        if obj != None:
+            obj.updatePosition((x,y,z))
+        if isinstance(obj, Drone):
+            self.dronePos = [x, y, z]
+
+    def _rd(self, x, y, z):
+        return self.arr[x+self.Xsize // 2][y][z+self.Zsize // 2]
+
+    '''def _wr(self, x, y, z, val):        
         self.arr[x+self.Xsize // 2][y][z+self.Zsize // 2] = val
         if val == self.drone:
             self.dronePos = [x, y, z]
     
     def _rd(self, x, y, z):        
         return self.arr[x+self.Xsize // 2][y][z+self.Zsize // 2]
-
+    '''
     #def sim_to_arr(self, x, y, z):
     #    return x+self.Xsize // 2, y, z+self.Zsize // 2
 
@@ -168,12 +185,12 @@ class BlockWorld:
             raise ValueError('cannot detach if already detached')
         #print("detach function, attached value: " + str(self.attached))
         for newY in range(y):
-            if self._rd(x, newY, z) == 0 or self.dronePos[1] == newY+1:
+            if self._rd(x, newY, z) == None or self.dronePos[1] == newY+1:
                 #if self.dronePos[1] != newY+1:
                 #    print("shouldn't execute this right now")
                 #    print("{0} = newY, {1} = droneY".format(newY,self.dronePos[1]))
                 #    self._wr(x, y-1, z, 0)
-                self._wr(x, y-1, z, 0)
+                self._wr(x, y-1, z, None)
                 self._wr(x, newY, z, self.attached)
                 #print((x, newY, z))
                 #print(self._rd(x, newY, z))
@@ -196,7 +213,7 @@ class BlockWorld:
             if max(abs(x), abs(z)) > self.Xsize or y >50 or y < 0:
                 raise ValueError('invalid block position: ', (x,y,z))
             if block == 'drone':
-                self.dronePos = [x,y,z]
+                self.dronePos = (x,y,z)
                 droneCount += 1
             elif y > 0: 
                 if (x,y-1,z) not in blockStates:
@@ -214,22 +231,32 @@ class BlockWorld:
         with open(filename, 'r', encoding='utf-8') as infile:
             for line in infile:
                 try:
-                    x,y,z,color = line.split(',')
+                    x,y,z,c = line.split(',')
                 except ValueError:
-                    x,y,z,color = line.split(' ')
+                    x,y,z,c = line.split(' ')
                 x = int(x)
                 y = int(y)
                 z = int(z)
-
-                if self._rd(x,y,z) is not None:
+                color = c.replace('\n', '')
+                coords = (x,y,z)
+                if coords in blockStates:
                     raise ValueError('duplicate position: ', coords)
+                blockStates[coords] = color
+                if self._rd(x,y,z) is not None:
+                    raise ValueError('duplicate position: ', (x,y,z))
                 if color != 'drone':
-                    self._wr(x,y,z, Block(color.replace('\n', ''), [x,y,z], self))
+                    self._wr(x,y,z, Block(color, [x,y,z], self))
+                    self.maxY = max(y, self.maxY)
                 if color == 'drone':
-                    self.drone = Drone([x,y,x], self)
+                    self.drone = Drone((x,y,x), self)
                     self._wr(x,y,z, self.drone)
-                    self.dronePos = [x,y,z]
+                    self.dronePos = (x,y,z)
 
+        if self._verifyStates(blockStates):
+            initializeString = 'Initialized from file ' + str(filename) + '\n'
+        else:
+            initializeString = 'Failed to initalize' + '\n'
+        logging.debug(initializeString)
 
     def initialize_goal(self, filename):
         goal = {}
@@ -249,7 +276,7 @@ class BlockWorld:
         yStart = max(yDrone, self.maxY)
         for y in range(yStart,-1,-1):
             for (x, z), val in np.ndenumerate(self.arr[:][y][:]):
-                if val > 0:
+                if val != None:
                     dic[(x - self.Xsize//2, y, z - self.Zsize//2)] = self.i2a[val]
         logging.debug('generated State\n')
         return dic
@@ -287,6 +314,7 @@ class BlockWorld:
                 for z in y:
                     if z is not None:
                         print (z)
+
     def plotPoints3d(self, state, titleString='BlockWorld Plot'):
             import matplotlib.pyplot as plt
             from mpl_toolkits.mplot3d import Axes3D
@@ -307,7 +335,6 @@ class BlockWorld:
             ax.set_ylabel('Z axis')
             ax.set_zlabel('Y axis')
             plt.show()
-
 
 # Z is across, top-left corner is -50,-50
 
