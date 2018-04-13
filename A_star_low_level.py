@@ -11,11 +11,11 @@ except ImportError:
     pass                            # python-3
 
 try:
-    from org.cs540.team1.BlockWorldSim import BlockWorld
+    import org.cs540.team1.EnhancedSimulator
 except ImportError:
-    from BlockWorldSim import BlockWorld
+    import EnhancedSimulator
 #import numpy as np
-import StateCreator
+#import StateCreator
 import copy
 #import random
 #import math
@@ -147,21 +147,23 @@ def astarHelper(bw_state, parentNode, goal, actionsF, takeActionF, goalTestF, hF
     if goalTestF(parentNode.state, goal):
         return ([parentNode.path], parentNode.g)
 
-    # Adjust the block world to reflect the drone position of the parent node - this should work for a recursive implementation,
-    # but it's certainly not thread safe
+    # Adjust the block world to reflect the drone position of the parent node
     oldDronePos = copy.deepcopy(bw_state.dronePos)
+    tmp_drone = bw_state.drone
     # Remove old location information for the drone
-    bw_state._wr(oldDronePos[0], oldDronePos[1], oldDronePos[2], 0)
+    bw_state._wr(oldDronePos[0], oldDronePos[1], oldDronePos[2], None)
     #Overwrite new location information for the drone and its attached block
     bw_state.dronePos = parentNode.state
-    bw_state._wr(bw_state.dronePos[0], bw_state.dronePos[1], bw_state.dronePos[2],9)
-
+    bw_state._wr(bw_state.dronePos[0], bw_state.dronePos[1], bw_state.dronePos[2],tmp_drone)
+    bw_state.drone.updatePosition((bw_state.dronePos[0], bw_state.dronePos[1], bw_state.dronePos[2]))
     # If the drone is attached to a block, then do the same for the attached block
     if bw_state.attached:
         #color = bw_state.arr[oldDronePos[0], oldDronePos[1]-1, oldDronePos[2]]
-        bw_state._wr(oldDronePos[0], oldDronePos[1]-1, oldDronePos[2], 0)
+        block = bw_state._rd(oldDronePos[0], oldDronePos[1]-1, oldDronePos[2])
+        bw_state._wr(oldDronePos[0], oldDronePos[1]-1, oldDronePos[2], None)
         # Arbitrarily setting the attached block color to 1 because we're not working on the master version of the Block World anyway
-        bw_state._wr(bw_state.dronePos[0], bw_state.dronePos[1]-1, bw_state.dronePos[2], 1)
+        block.updatePosition((bw_state.dronePos[0], bw_state.dronePos[1]-1, bw_state.dronePos[2]))
+        bw_state._wr(bw_state.dronePos[0], bw_state.dronePos[1]-1, bw_state.dronePos[2], block)
 
     ## Construct list of children nodes with f, g, and h values
     actions = actionsF(bw_state)
@@ -327,9 +329,9 @@ Function: initialize_world(Xsize, Zsize, config = "config.txt", goal_config = "g
 
 Purpose: Optional setup helper function that intializes a BlockWorld and goal state (wildcards NOT implemented) from file
 '''
-def initialize_world(Xsize, Zsize, config = "config.txt", goal_config = "goal_config.txt"):
+def initialize_world(Xsize, Ysize, Zsize, config = "config.txt", goal_config = "goal_config.txt"):
     print(config)
-    bw = BlockWorld(Xsize, Zsize)
+    bw = EnhancedSimulator.BlockWorld(Xsize, Ysize, Zsize)
     bw.initialize(config)
     #print(bw.dronePos)
     goal = bw.initialize_goal(goal_config) #x+ Xsize //2 (0=5)
@@ -345,27 +347,29 @@ when the new location is invalid - used with the bw_actionF method to rule out i
 
 '''
 def validMove(bw, newX, newY, newZ):
-        if max(abs(newX), abs(newZ)) > bw.Xsize /2 or newY > 51:
-            return False
-        elif newY < 0 or (newY == 0 and bw.attached):
-            return False
-        elif bw.attached and (bw._rd(newX, newY-1, newZ) not in [0,'drone']):
-            return False
-        elif bw.attached and newX == 0 and newZ == 0:
-            pass
-        elif bw._rd(newX, newY, newZ) != 0:
-            return False
-        return True
+    if max(abs(newX), abs(newZ)) > bw.Xsize /2 or newY > bw.Ysize:
+        return False
+    elif newY < 0 or (newY == 0 and bw.attached):
+        return False
+    elif bw.attached and ((bw._rd(newX, newY-1, newZ) != None) or isinstance(bw._rd(newX, newY-1, newZ), EnhancedSimulator.Drone)):
+        strng = 'new attached block position occupied ' + str((newX, newY-1, newZ))
+        return False
+    elif bw.attached and newX is None and newZ is None:
+        pass
+    elif bw._rd(newX, newY, newZ) is not None:
+        strng = 'new drone position occupied ' + str((newX, newY, newZ))
+        return False
+    return True
 
 if __name__ == '__main__':
 
     #max_block_height = 2
-    Xsize, Zsize =101,101
+    Xsize, Ysize, Zsize =101,51, 101
     #random.seed()
     #arr, ysum = StateCreator.stateCreator(max_block_height, Xsize, Zsize)
     #StateCreator.single_tower_goal_creator(ysum, Xsize, Zsize)
 
-    bw, goal_state = initialize_world(Xsize, Zsize, config = "tiny_config.txt", goal_config="tiny_goal.txt")
+    bw, goal_state = initialize_world(Xsize, Ysize, Zsize, config = "tiny_config.txt", goal_config="tiny_goal.txt")
     #path = []
     move_goal = ((-4,0,1),(0,0,1))
     start_time = time.time()
